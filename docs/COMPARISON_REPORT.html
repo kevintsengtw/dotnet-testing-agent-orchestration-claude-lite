@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>claude-lite vs baseline — 單元測試工作流程對照報告</title>
+<style>
+  .viz-root {
+    color-scheme: light;
+    --surface-1: #fcfcfb;
+    --page: #f9f9f7;
+    --text-primary: #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted: #898781;
+    --grid: #e1e0d9;
+    --baseline: #c3c2b7;
+    --border: rgba(11,11,11,0.10);
+    --series-1: #2a78d6;  /* baseline */
+    --series-2: #eb6834;  /* lite */
+    --delta-good: #006300;
+    --status-good: #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --surface-1: #1a1a19;
+      --page: #0d0d0d;
+      --text-primary: #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted: #898781;
+      --grid: #2c2c2a;
+      --baseline: #383835;
+      --border: rgba(255,255,255,0.10);
+      --series-1: #3987e5;
+      --series-2: #d95926;
+      --delta-good: #0ca30c;
+      --status-good: #0ca30c;
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body.viz-root {
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+    line-height: 1.55;
+    padding: 32px 20px 48px;
+  }
+  .wrap { max-width: 980px; margin: 0 auto; }
+  header h1 { font-size: 24px; font-weight: 650; letter-spacing: 0.01em; }
+  header .sub { color: var(--text-secondary); font-size: 13.5px; margin-top: 6px; }
+  header .sub code { font-size: 12px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 4px; padding: 1px 5px; }
+  section { margin-top: 28px; }
+  h2 { font-size: 16px; font-weight: 650; margin-bottom: 12px; }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 18px 20px;
+  }
+  /* ── stat tiles ── */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; margin-top: 18px; }
+  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .tile .label { font-size: 12.5px; color: var(--text-secondary); }
+  .tile .value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile .note  { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+  .tile .good  { color: var(--delta-good); }
+  /* ── bar chart ── */
+  .chart { margin-top: 4px; }
+  .legend { display: flex; gap: 18px; font-size: 12.5px; color: var(--text-secondary); margin-bottom: 12px; }
+  .legend .key { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: baseline; }
+  .row { display: grid; grid-template-columns: 168px 1fr; align-items: center; margin-bottom: 14px; }
+  .row .name { font-size: 13px; color: var(--text-primary); padding-right: 12px; }
+  .row .name .delta { display: block; font-size: 12px; color: var(--delta-good); font-weight: 600; }
+  .bars { display: flex; flex-direction: column; gap: 2px; }
+  .bar-line { display: flex; align-items: center; height: 20px; }
+  .bar {
+    height: 20px;
+    border-radius: 0 4px 4px 0; /* 4px rounded data-end, square baseline */
+    min-width: 3px;
+    cursor: default;
+  }
+  .bar.b1 { background: var(--series-1); }
+  .bar.b2 { background: var(--series-2); }
+  .bar-val { font-size: 12px; color: var(--text-secondary); margin-left: 8px; white-space: nowrap; }
+  .axis-note { font-size: 11.5px; color: var(--text-muted); margin-top: 8px; border-top: 1px solid var(--grid); padding-top: 8px; }
+  /* ── tooltip ── */
+  #tip {
+    position: fixed; z-index: 10; pointer-events: none; display: none;
+    background: var(--surface-1); color: var(--text-primary);
+    border: 1px solid var(--border); border-radius: 8px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.14);
+    padding: 8px 11px; font-size: 12.5px; line-height: 1.5;
+  }
+  #tip .t-title { font-weight: 600; }
+  #tip .t-sub { color: var(--text-secondary); }
+  /* ── tables ── */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .win { color: var(--delta-good); font-weight: 600; }
+  .win::before { content: "▲ "; font-size: 10px; }
+  .flat { color: var(--text-muted); }
+  .mono { font-variant-numeric: tabular-nums; }
+  details { margin-top: 10px; }
+  summary { cursor: pointer; font-size: 13px; color: var(--text-secondary); }
+  .notes { font-size: 13px; color: var(--text-secondary); }
+  .notes li { margin: 6px 0 6px 18px; }
+  footer { margin-top: 30px; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--grid); padding-top: 12px; }
+  footer code { font-size: 11px; }
+</style>
+</head>
+<body class="viz-root">
+<div class="wrap">
+
+<header>
+  <h1>claude-lite vs baseline — 單元測試工作流程對照報告</h1>
+  <div class="sub">
+    量測期間 2026-07-28 ～ 07-30 · headless <code>claude -p --model sonnet</code>，一 run 一全新 session ·
+    baseline＝原版 1+4 工作流程（<code>feature/shared-skills-agents-path-separation @ 08c8ea5</code>）·
+    token 口徑＝net10 兩側各 n=3 之中位數 · coverage 兩側同用 <code>coverage-summary.mjs</code> 量測
+  </div>
+</header>
+
+<div class="tiles">
+  <div class="tile">
+    <div class="label">Input token 中位數降幅（含快取）</div>
+    <div class="value good">−31% ～ −59%</div>
+    <div class="note">四個 target 全數顯著下降，降幅隨複雜度擴大</div>
+  </div>
+  <div class="tile">
+    <div class="label">Output token 中位數降幅</div>
+    <div class="value good">−9% ～ −83%</div>
+    <div class="note">最重 target（4 依賴 service）降 82.7%</div>
+  </div>
+  <div class="tile">
+    <div class="label">品質（coverage）</div>
+    <div class="value">回退 0 · lite 優 2/4</div>
+    <div class="note">net8/9/10 共 24 格全數不回退，跨 framework 一致</div>
+  </div>
+  <div class="tile">
+    <div class="label">可移植性驗證</div>
+    <div class="value">通過</div>
+    <div class="note">隔離環境・陌生類別・僅部署單位：100%/100%</div>
+  </div>
+</div>
+
+<section>
+  <div class="card chart">
+    <h2>Input token（含快取）中位數 — 每 target，n=3</h2>
+    <div class="legend">
+      <span><span class="key" style="background:var(--series-1)"></span>baseline（1+4）</span>
+      <span><span class="key" style="background:var(--series-2)"></span>lite（1+2）</span>
+    </div>
+    <div id="chart-input"></div>
+    <div class="axis-note">橫軸：token 數（M＝百萬）。lite 列尾的綠色百分比為相對 baseline 的中位數降幅。</div>
+  </div>
+</section>
+
+<section>
+  <div class="card chart">
+    <h2>Output token 中位數 — 每 target，n=3</h2>
+    <div class="legend">
+      <span><span class="key" style="background:var(--series-1)"></span>baseline（1+4）</span>
+      <span><span class="key" style="background:var(--series-2)"></span>lite（1+2）</span>
+    </div>
+    <div id="chart-output"></div>
+    <div class="axis-note">OrderValidator 是唯一 baseline 未觸發平行 Writer 分割的 target，也是唯一 output 小降幅，支持「output 大降幅部分來自 baseline 平行 Writer 的重複產出」的解釋。</div>
+  </div>
+</section>
+
+<section>
+  <div class="card">
+    <h2>品質矩陣 — line／branch coverage（net8・net9・net10 一致時合併呈現）</h2>
+    <table>
+      <thead>
+        <tr><th>Target</th><th>baseline</th><th>lite</th><th>判定</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>TemperatureConverter<br><span class="flat" style="font-size:12px">pure function</span></td>
+          <td class="mono">100% / 100%</td>
+          <td class="mono">100% / 100%</td>
+          <td class="flat">持平（兩側皆天花板）</td>
+        </tr>
+        <tr>
+          <td>OrderValidator<br><span class="flat" style="font-size:12px">validator（巢狀規則）</span></td>
+          <td class="mono">88.57% / 50%</td>
+          <td class="mono"><b>97.14%</b> / 50%</td>
+          <td><span class="win">lite 優 +8.57pp</span><br><span class="flat" style="font-size:12px">baseline 三個 framework 皆結構性漏測委派建構子；lite 唯一缺口為 uncoverable 死碼</span></td>
+        </tr>
+        <tr>
+          <td>SubscriptionService<br><span class="flat" style="font-size:12px">service</span></td>
+          <td class="mono">100% / 100%</td>
+          <td class="mono">100% / 100%</td>
+          <td class="flat">持平（兩側皆天花板）</td>
+        </tr>
+        <tr>
+          <td>OrderProcessingService<br><span class="flat" style="font-size:12px">multi-dependency service（4 依賴）</span></td>
+          <td class="mono">100% / 95.45%</td>
+          <td class="mono">100% / <b>100%</b></td>
+          <td><span class="win">lite branch 優 +4.55pp</span><br><span class="flat" style="font-size:12px">baseline 三輪皆漏測可測的 null-coalescing 分支；lite 三輪皆涵蓋（net8 單輪變異經確認輪排除）</span></td>
+        </tr>
+      </tbody>
+    </table>
+    <details>
+      <summary>數據表（圖表對應的中位數原始值）</summary>
+      <table style="margin-top:10px">
+        <thead><tr><th>Target</th><th class="num">baseline input</th><th class="num">lite input</th><th class="num">降幅</th><th class="num">baseline output</th><th class="num">lite output</th><th class="num">降幅</th></tr></thead>
+        <tbody>
+          <tr><td>TemperatureConverter</td><td class="num">4,378,433</td><td class="num">2,808,472</td><td class="num win">−35.9%</td><td class="num">52,904</td><td class="num">27,263</td><td class="num win">−48.5%</td></tr>
+          <tr><td>OrderValidator</td><td class="num">5,295,504</td><td class="num">3,632,329</td><td class="num win">−31.4%</td><td class="num">53,755</td><td class="num">48,918</td><td class="num win">−9.0%</td></tr>
+          <tr><td>SubscriptionService</td><td class="num">6,999,817</td><td class="num">4,356,495</td><td class="num win">−37.8%</td><td class="num">75,663</td><td class="num">42,344</td><td class="num win">−44.0%</td></tr>
+          <tr><td>OrderProcessingService</td><td class="num">9,888,447</td><td class="num">4,104,345</td><td class="num win">−58.5%</td><td class="num">85,141</td><td class="num">14,695</td><td class="num win">−82.7%</td></tr>
+        </tbody>
+      </table>
+    </details>
+  </div>
+</section>
+
+<section>
+  <div class="card notes">
+    <h2>方法、稽核與限制</h2>
+    <ul>
+      <li><b>架構差異</b>：baseline＝Analyzer → Writer（可平行分割）→ Executor → Reviewer（1+4）；lite＝Author（分析＋場景推導＋撰寫＋建置修正）→ Reviewer（獨立審查＋驗證執行＋coverage），全循序、單一類別上限、技能白名單 14＋1。</li>
+      <li><b>品質優勢來源</b>：lite 的兩項 coverage 優勢皆源自其場景推導紀律（public 建構子強制列管、guard／分支展開規則），各 target 三輪與跨 framework 一致支持系統性效果；已通過「示例去名化後重驗」確認非示例記憶（詳私有 lab repo 稽核章節）。</li>
+      <li><b>可移植性</b>：於隔離環境（獨立專案、工作流程從未見過的自創類別、僅複製部署單位、無 lab 文件）完整跑通：25/25 全綠、100%/100%、可選配件缺失時優雅降級，工作流程不依賴 lab 環境。</li>
+      <li><b>限制</b>：wallclock 僅 OrderValidator 一個 target 兩側可比（其餘 baseline 為平行執行）；lite 側 token run-to-run 離散約 ±20%，大於 baseline（單一 Author 場景推導規模波動），協定以中位數比較故不影響結論，列為後續優化線索；範圍限 xUnit 單元測試工作流程。</li>
+      <li><b>資料效力</b>：45 次 <code>claude -p</code> 呼叫、42 個有效樣本格（Stage 1 net10 各 n=3＋Stage 2 net8/9 各 n=1＋2 次確認輪），3 次用量上限中止皆依協定作廢重跑、零數據污染；每 run 環境還原有逐輪驗證紀錄。</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  數據來源：lite 量測紀錄與 artifacts（ledger.jsonl 為 token 權威），保存於私有 lab repo，需要覆核時可提供 ·
+  對照文字版：<code>docs/COMPARISON_REPORT.md</code> · 產出日期 2026-07-31
+</footer>
+
+</div>
+<div id="tip"></div>
+<script>
+(function () {
+  var fmtM = function (v) { return (v / 1e6).toFixed(2) + "M"; };
+  var fmtK = function (v) { return (v / 1e3).toFixed(1) + "K"; };
+  var full = function (v) { return v.toLocaleString("en-US"); };
+
+  var INPUT = [
+    { name: "TemperatureConverter", b: 4378433, l: 2808472, d: "−35.9%" },
+    { name: "OrderValidator",       b: 5295504, l: 3632329, d: "−31.4%" },
+    { name: "SubscriptionService",  b: 6999817, l: 4356495, d: "−37.8%" },
+    { name: "OrderProcessingService", b: 9888447, l: 4104345, d: "−58.5%" }
+  ];
+  var OUTPUT = [
+    { name: "TemperatureConverter", b: 52904, l: 27263, d: "−48.5%" },
+    { name: "OrderValidator",       b: 53755, l: 48918, d: "−9.0%" },
+    { name: "SubscriptionService",  b: 75663, l: 42344, d: "−44.0%" },
+    { name: "OrderProcessingService", b: 85141, l: 14695, d: "−82.7%" }
+  ];
+
+  var tip = document.getElementById("tip");
+  function showTip(e, html) {
+    tip.innerHTML = html;
+    tip.style.display = "block";
+    var x = e.clientX + 14, y = e.clientY + 12;
+    if (x + tip.offsetWidth > window.innerWidth - 8) x = e.clientX - tip.offsetWidth - 10;
+    tip.style.left = x + "px";
+    tip.style.top = y + "px";
+  }
+  function hideTip() { tip.style.display = "none"; }
+
+  function render(elId, data, fmt, unitLabel) {
+    var max = 0;
+    data.forEach(function (r) { max = Math.max(max, r.b, r.l); });
+    var el = document.getElementById(elId);
+    data.forEach(function (r) {
+      var row = document.createElement("div");
+      row.className = "row";
+      var name = document.createElement("div");
+      name.className = "name";
+      name.innerHTML = r.name + '<span class="delta">' + r.d + "</span>";
+      var bars = document.createElement("div");
+      bars.className = "bars";
+      [["b1", r.b, "baseline（1+4）"], ["b2", r.l, "lite（1+2）"]].forEach(function (s) {
+        var line = document.createElement("div");
+        line.className = "bar-line";
+        var bar = document.createElement("div");
+        bar.className = "bar " + s[0];
+        bar.style.width = Math.max(0.6, (s[1] / max) * 68) + "%";
+        var tipHtml = '<div class="t-title">' + r.name + "</div>" +
+          '<div class="t-sub">' + s[2] + "：" + full(s[1]) + " tokens（" + unitLabel + " 中位數，n=3）</div>";
+        bar.addEventListener("mousemove", function (e) { showTip(e, tipHtml); });
+        bar.addEventListener("mouseleave", hideTip);
+        var val = document.createElement("span");
+        val.className = "bar-val";
+        val.textContent = fmt(s[1]);
+        line.appendChild(bar);
+        line.appendChild(val);
+        bars.appendChild(line);
+      });
+      row.appendChild(name);
+      row.appendChild(bars);
+      el.appendChild(row);
+    });
+  }
+
+  render("chart-input", INPUT, fmtM, "input 含快取");
+  render("chart-output", OUTPUT, fmtK, "output");
+})();
+</script>
+</body>
+</html>
