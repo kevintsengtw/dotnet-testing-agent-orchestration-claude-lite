@@ -21,7 +21,10 @@
 
 ## 部署單位清單
 
-以下為工作流程**完整部署單位**（照 [CLAUDE.md](../CLAUDE.md) 已定版內容）：
+以下為工作流程**完整部署單位**：
+
+> `.agents/skills/` 這個目錄本身就是技能的可用範圍：Author 與 Reviewer 只能從這裡載入，
+> 目錄裡沒有的技能對工作流程而言不存在，不另設白名單清單。
 
 ```text
 .claude/agents/                                  2 個定義檔
@@ -31,23 +34,30 @@
 .claude/skills/dotnet-testing-lite-orchestrator-unit/SKILL.md   主 session 指揮中心
 .claude/skills/dotnet-test/                                     Author 建置前載入
 
-.agents/skills/                                  14 個共用技能（內容不可更改）
+.agents/skills/                                  18 個共用技能（內容不可更改）
 ├── unit-test-scenarios/
 ├── dotnet-testing-unit-test-fundamentals/
 ├── dotnet-testing-test-naming-conventions/
-├── dotnet-testing-awesome-assertions-guide/
 ├── dotnet-testing-xunit-project-setup/
+├── dotnet-testing-awesome-assertions-guide/
 ├── dotnet-testing-nsubstitute-mocking/
 ├── dotnet-testing-autofixture-basics/
+├── dotnet-testing-autofixture-customization/
+├── dotnet-testing-autofixture-nsubstitute-integration/
+├── dotnet-testing-autodata-xunit-integration/
 ├── dotnet-testing-datetime-testing-timeprovider/
 ├── dotnet-testing-filesystem-testing-abstractions/
 ├── dotnet-testing-fluentvalidation-testing/
-├── dotnet-testing-code-coverage-analysis/
-├── dotnet-testing-autodata-xunit-integration/
-├── dotnet-testing-autofixture-nsubstitute-integration/
-└── dotnet-testing-test-output-logging/
+├── dotnet-testing-complex-object-comparison/
+├── dotnet-testing-test-data-builder-pattern/
+├── dotnet-testing-private-internal-testing/
+├── dotnet-testing-test-output-logging/
+└── dotnet-testing-code-coverage-analysis/
 
-.claude/scripts/coverage-summary.mjs             唯一新增腳本：Cobertura → 目標類別摘要
+.agents/SKILLS-INDEX.md                          技能索引（由腳本自動生成）
+
+.claude/scripts/coverage-summary.mjs             Cobertura → 目標類別摘要
+.claude/scripts/generate-skills-index.mjs        重新生成技能索引（--check 可驗一致性）
 ```
 
 **可選配件**（裝不裝都不影響核心工作流程）：
@@ -74,7 +84,7 @@
    ls .claude/agents/dotnet-testing-lite-reviewer.md
    ls .claude/skills/dotnet-testing-lite-orchestrator-unit/SKILL.md
    ls .claude/skills/dotnet-test/
-   ls .agents/skills/ | wc -l   # 應為 14
+   ls -d .agents/skills/*/ | wc -l   # 應為 18
    ls .claude/scripts/coverage-summary.mjs
    ```
 
@@ -106,7 +116,7 @@
 
 **Q：技能路徑不存在會發生什麼？**
 
-Author 定義檔明訂「共用技能路徑不存在時回報錯誤並中止，不得略過技能直接工作」，這是刻意的 fail-closed 設計，不會靜默降級成「沒有這個技能就跳過」。如果 Author 回報找不到某個 `.agents/skills/<name>/SKILL.md`，代表安裝步驟 1 沒有把 `.agents/skills/` 完整複製過去，回頭檢查該目錄下是否確實有 14 個技能資料夾（見上方「驗證檔案就位」的 `wc -l` 指令）。
+Author 定義檔明訂「共用技能路徑不存在時回報錯誤並中止，不得略過技能直接工作」，這是刻意的 fail-closed 設計，不會靜默降級成「沒有這個技能就跳過」。如果 Author 回報找不到某個 `.agents/skills/<name>/SKILL.md`，代表安裝步驟 1 沒有把 `.agents/skills/` 完整複製過去，回頭檢查該目錄下是否確實有 18 個技能資料夾（見上方「驗證檔案就位」的 `wc -l` 指令）。
 
 **Q：可選配件缺失會怎樣？**
 

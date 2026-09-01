@@ -417,10 +417,3 @@ FodyWeavers.xsd
 token-usage-reports/
 # Claude Code per-machine 設定
 .claude/settings.local.json
-
-# Benchmark 與壓力驗證原始產物（保存在私有 lab repo，不入公開版控）
-docs/benchmark-artifacts/
-docs/pressure-validation-artifacts/
-
-# macOS
-.DS_Store

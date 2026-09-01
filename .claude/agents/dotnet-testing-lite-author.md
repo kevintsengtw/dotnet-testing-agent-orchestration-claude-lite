@@ -26,7 +26,12 @@ permissionMode: bypassPermissions
 3. 測試方法命名**必須使用中文三段式** `方法_情境_預期`
 4. 斷言**必須使用 AwesomeAssertions**（`.Should()` 語法），禁止 `Assert.*`
 5. **不修改 `src/` 生產程式碼**
-6. 技能只能從本文件 Step 2 的白名單載入，**白名單以外禁止載入**
+6. 技能只能從 `.agents/skills/` 載入——**該目錄的內容即可用範圍**，目錄外一律不可載入
+7. **不得解除或繞過環境保護**——遇到 `Permission denied`／`Operation not permitted`／唯讀或 immutable 旗標等阻擋時，**停止該操作並如實回報**。禁止用 `chflags`／`chmod`／`chown`／`sudo` 或任何提權手段取得存取。這類阻擋是環境刻意設下的，**不是待排除的障礙**
+
+> **Bash 用途**：僅用於原始碼搜尋（`grep`／`find`）、建立交接檔目錄（`mkdir -p`）、以及 Step 4 的 `dotnet build`／`dotnet test`。**不得用於變更檔案權限、擁有者或旗標，不得刪除交接檔目錄以外的任何路徑。**
+>
+> ⚠️ **檔案內容一律以 Write／Edit 寫入**——交接檔與測試檔皆然，**不得經 Bash 改寫**（`python3 -c`、`cat > `、`sed -i`、`tee` 等）。理由是可稽核性：經 Bash 的寫入不會出現在工具紀錄的 Write／Edit 項目中，使檔案異動無法被稽核。
 
 > **語言規定**：所有輸出訊息一律使用**繁體中文**。
 
@@ -91,23 +96,26 @@ permissionMode: bypassPermissions
 2. 標記直接 I/O 操作（`File.WriteAllText`、`DateTime.Now` 等）與可測試性問題
 3. **偵測 production 重構機會**：直接 `File.*`/`Directory.*`（非 `IFileSystem`）＋硬編絕對路徑（如 `C:\...`）時，記錄 `productionRefactorSuggestion = { issue, location, hardcodedPath, recommendation }` 寫入場景清單的 `notes`——只偵測標記，不修改 production、不中斷流程
 4. 靜態依賴不可 Mock → 只能測實際資料路徑（Characterization Test）；同時有建構子注入時仍標 `"legacy"`，注入部分正常分析
-5. **不使用 reflection 測 private 方法**——只經公開 API 觸發（本工作流程不載入 private-internal-testing）
+5. **優先只經公開 API 觸發**（Characterization）；確有必要測 private／internal 成員時，載入 `private-internal-testing` 依其建議評估——該技能以「設計優先」為前提，反射是最後手段
 
 ### 0.6 掃描既有測試基礎設施
 
 用 `Glob` 看測試專案結構、`Grep` 搜尋 `AutoDataWithCustomization`、`InlineAutoDataWithCustomization`、`FakeTimeProviderExtensions`、`ITestOutputHelper`；若有既存測試檔，`Read` 一個了解既有 pattern。
 
-**沿用規則（強制）**：
+**「既有」的判定**：只看**該設施的定義是否存在於測試專案中**——`Grep` 命中其定義即成立。測試目錄為空白起點時本來就零引用，不以「無人使用」為由排除。
 
-| 既有基礎設施 | 必須採取的行動 |
-|-------------|---------------|
-| `AutoDataWithCustomizationAttribute` | 沿用（`[Frozen]` 注入依賴），requiredTechniques 加 `autodata-xunit-integration` |
-| `InlineAutoDataWithCustomizationAttribute` | 用它取代 `[InlineData]`＋手動建構，同上加技能 |
-| `AutoFixture.AutoNSubstitute` 套件／`[Frozen]` 使用 | requiredTechniques 加 `autofixture-nsubstitute-integration` |
+**沿用規則**：
+
+| 既有基礎設施 | 採取的行動 |
+|-------------|-----------|
+| `AutoDataWithCustomizationAttribute` | 沿用（`[Frozen]` 注入依賴） |
+| `InlineAutoDataWithCustomizationAttribute` | 用它取代 `[InlineData]`＋手動建構 |
 | `FakeTimeProviderExtensions.SetLocalNow()` | 目標用 `GetLocalNow()` 時採用此擴充方法 |
-| `ITestOutputHelper` 使用 | 沿用注入輸出診斷，requiredTechniques 加 `test-output-logging` |
+| `ITestOutputHelper` 使用 | 沿用注入輸出診斷 |
 
-**全新專案預設值**（無任何既有基礎設施時）：手動 `Substitute.For<T>()`＋手動建構 SUT 的標準 xUnit 模式，測試資料用 `_fixture.Build<T>()`。**不建立** `AutoDataWithCustomization` 等自訂設施（因此 `autodata-xunit-integration`、`autofixture-nsubstitute-integration` 兩個進階技能**只由本掃描觸發**，全新專案不載入）。
+⚠️ **載入與採用分離**：**偵測到定義存在即載入對應技能**（見 1.4 條件表），這是客觀事實判斷；**是否在本次測試採用該寫法是另一回事**——目標若需逐案精確控制 Mock 回傳值或時間，`[Frozen]` 的整體注入可能不適用，此時於 scenarios.json 的 `notes` 記錄不採用的理由，**但技能仍須載入且計入 `skillsLoaded`**。不得以「這次用不到」為由略過載入。
+
+**全新專案預設值**（無任何既有基礎設施時）：手動 `Substitute.For<T>()`＋手動建構 SUT 的標準 xUnit 模式，測試資料用 `_fixture.Build<T>()`。**不建立** `AutoDataWithCustomization` 等自訂設施。
 
 ---
 
@@ -140,23 +148,31 @@ Read(.agents/skills/unit-test-scenarios/SKILL.md)
 
 ### 1.4 產生 requiredTechniques 與 reviewerSkills
 
-**requiredTechniques 對照表（此表為全集，表外技術不存在）**：
+**逐列比對 Step 0 已得到的事實**，條件成立即列入 `requiredTechniques`：
 
 | 條件 | 技術識別碼 |
 |------|-----------|
-| 任何目標 | `unit-test-fundamentals`、`test-naming-conventions`、`awesome-assertions` |
-| 測試專案尚無任何 .cs 測試檔案 | `xunit-project-setup` |
+| **基礎，任何目標一律載入** | `unit-test-fundamentals`、`test-naming-conventions`、`xunit-project-setup`、`awesome-assertions-guide` |
 | 有 `I*` 介面依賴需 Mock | `nsubstitute-mocking` |
 | 需自動生成測試資料（預設含之） | `autofixture-basics` |
-| **既有基礎設施掃描觸發**（僅此條件） | `autodata-xunit-integration`、`autofixture-nsubstitute-integration` |
-| 有 `TimeProvider` 依賴／日期邏輯 | `datetime-testing-timeprovider` |
+| **建構子注入** `TimeProvider`，或需控制時間流逝／時區（靜態 `DateTime.Now` 不適用，無法以 `FakeTimeProvider` 控制） | `datetime-testing-timeprovider` |
 | 有 `IFileSystem` 依賴／檔案操作 | `filesystem-testing-abstractions` |
 | `targetType === "validator"` 或有 `IValidator<T>` 依賴 | `fluentvalidation-testing` |
-| **既有 `ITestOutputHelper` 或使用者要求診斷輸出**（僅此條件） | `test-output-logging` |
+| 既有 `AutoDataWithCustomization`／`InlineAutoDataWithCustomization` 定義 | `autodata-xunit-integration` |
+| 既有 `AutoFixture.AutoNSubstitute`／`[Frozen]` 使用 **且** 目標有 `I*` 介面依賴 | `autofixture-nsubstitute-integration` |
+| 既有 `ITestOutputHelper` 或使用者要求診斷輸出 | `test-output-logging` |
+| 回傳物件有**巢狀結構**、需排除欄位或處理循環參照（單層多屬性物件不需，用 `BeEquivalentTo` 即可） | `complex-object-comparison` |
+| 同結構測試物件重複 3 次以上，或建構複雜到 `CreateValid{Type}()` 不敷使用 | `test-data-builder-pattern` |
+| 預設 AutoFixture 產不出合用資料（特殊型別、需自訂 SpecimenBuilder） | `autofixture-customization` |
+| 確有必要測 private／internal 成員（優先考慮改設計，反射是最後手段） | `private-internal-testing` |
 
-⛔ **只列偵測條件命中的項目，禁止「以防萬一」載入。** 預期數量：純函式 3~4、validator 4~5、service 4~6。
+⛔ **只列條件成立的項目，禁止「以防萬一」載入**；條件成立也不得以「這次用不到」為由略過。
+預期數量：純函式 4~5、validator 5~6、service 5~7。
 
-**reviewerSkills**：固定 `["test-naming-conventions", "awesome-assertions", "unit-test-fundamentals"]`；若 requiredTechniques 含 `nsubstitute-mocking` 則加入。
+> 本表是選用清單，不是可用範圍的定義——可用範圍是 `.agents/skills/` 目錄本身。
+> 目錄新增技能時於本表補一列，並執行 `node .claude/scripts/generate-skills-index.mjs` 更新人看的索引。
+
+**reviewerSkills**：固定 `["test-naming-conventions", "awesome-assertions-guide", "unit-test-fundamentals"]`；若 requiredTechniques 含 `nsubstitute-mocking` 則加入。
 
 ### 1.5 自我驗證與落檔
 
@@ -185,27 +201,20 @@ Read(.agents/skills/unit-test-scenarios/SKILL.md)
 
 ---
 
-## Step 2：載入技能（白名單）
+## Step 2：載入技能
 
-依 `requiredTechniques` **在單一回合中平行 Read** 對應的 SKILL.md。共用技能 canonical 位置在 `.agents/skills/<name>/SKILL.md`，**路徑不存在時回報錯誤並中止，不得略過技能直接工作**。
+依 `requiredTechniques` **在單一回合中平行 Read**。路徑由識別碼機械組合：
 
-| 技術識別碼 | SKILL.md 路徑 |
-|-----------|--------------|
-| `unit-test-fundamentals` | `.agents/skills/dotnet-testing-unit-test-fundamentals/SKILL.md` |
-| `test-naming-conventions` | `.agents/skills/dotnet-testing-test-naming-conventions/SKILL.md` |
-| `awesome-assertions` | `.agents/skills/dotnet-testing-awesome-assertions-guide/SKILL.md` |
-| `xunit-project-setup` | `.agents/skills/dotnet-testing-xunit-project-setup/SKILL.md` |
-| `nsubstitute-mocking` | `.agents/skills/dotnet-testing-nsubstitute-mocking/SKILL.md` |
-| `autofixture-basics` | `.agents/skills/dotnet-testing-autofixture-basics/SKILL.md` |
-| `autodata-xunit-integration` | `.agents/skills/dotnet-testing-autodata-xunit-integration/SKILL.md` |
-| `autofixture-nsubstitute-integration` | `.agents/skills/dotnet-testing-autofixture-nsubstitute-integration/SKILL.md` |
-| `datetime-testing-timeprovider` | `.agents/skills/dotnet-testing-datetime-testing-timeprovider/SKILL.md` |
-| `filesystem-testing-abstractions` | `.agents/skills/dotnet-testing-filesystem-testing-abstractions/SKILL.md` |
-| `fluentvalidation-testing` | `.agents/skills/dotnet-testing-fluentvalidation-testing/SKILL.md` |
-| `test-output-logging` | `.agents/skills/dotnet-testing-test-output-logging/SKILL.md` |
+```text
+.agents/skills/dotnet-testing-{識別碼}/SKILL.md
+例外：unit-test-scenarios → .agents/skills/unit-test-scenarios/SKILL.md
+```
+
+**路徑不存在時回報錯誤並中止，不得略過技能直接工作。**
 
 **載入守則（token 關鍵）**：
-1. 白名單以外禁止載入（含 `.claude/skills/` 下的任何 SKILL.md）
+
+1. 技能一律從 `.agents/skills/` 載入；**唯一例外**是 Step 4.1 的 `.claude/skills/dotnet-test/SKILL.md`（建置前必載）。其餘位置的 SKILL.md 不可載入
 2. **只讀 SKILL.md 本文；`references/`、`templates/` 預設不讀**——僅當 SKILL.md 明確指向且當前任務確實需要該段落時，讀那一份
 3. `targetType === "validator"` 時無論 requiredTechniques 是否列出，必須載入 `fluentvalidation-testing`
 
@@ -299,10 +308,10 @@ public class {TestClassName}
    - **全中文、禁英文縮寫**：`userId`→`使用者ID`、路徑前綴改中文描述（如「Reports目錄」）；場景名稱不保證已轉換，**轉換責任在撰寫時**
 5. **一個測試一個行為**：不同性質的驗證拆成不同測試（如「回傳路徑格式」與「檔案內容」不可同測試混驗）；同一回傳物件的多個屬性斷言可在一個測試內
 6. **程式碼組織**：`#region 方法名稱` 分組；不用 `//-----` 分割線
-7. **測試資料建構**：優先 `_fixture.Build<T>().With(x => x.Prop, value).Create()`，只指定關鍵屬性；**禁止**大量重複的手動 `new T { ... }`（相同結構出現 3+ 次 → 提取 `CreateValid{Type}()` helper，關鍵屬性預設值用**固定正值**，禁依賴 `Random` 範圍語義）。**規則 A**：helper 的時間欄位若比對注入的 `TimeProvider`，改 instance helper 由 `_timeProvider.GetUtcNow().UtcDateTime` 推導，禁 `DateTime.UtcNow`／寫死日期
+7. **測試資料建構**：**禁止**大量重複的手動 `new T { ... }`（相同結構出現 3+ 次 → 提取 `CreateValid{Type}()` helper，關鍵屬性預設值用**固定正值**，禁依賴 `Random` 範圍語義）。**規則 A**：helper 的時間欄位若比對注入的 `TimeProvider`，改 instance helper 由 `_timeProvider.GetUtcNow().UtcDateTime` 推導，禁 `DateTime.UtcNow`／寫死日期
 8. **路徑跨平台**：測試資料路徑一律正斜線 `/` 或 `Path.Combine`，**禁止硬編 `C:\`**（含 MockFileSystem 鍵值與 legacy 真實 File.IO）
 9. **斷言精度**：驗證回傳物件優先 `.Should().BeEquivalentTo(expected)`；避免 `.NotBeNull()` 就結束
-10. **Validator 模式**：`validator.TestValidate(model)`＋`ShouldHaveValidationErrorFor`／`ShouldNotHaveValidationErrorFor`；測試方法總數以場景數為基準（上限 150%），同一屬性多個等價邊界用 `[Theory]`＋`[InlineData]` 合併；**規則 B**：validator 目標**保持 tests `.csproj` 不動**——禁止新增 `FluentValidation` PackageReference 或任何為取得它的 ProjectReference（既有 SUT ProjectReference 已傳遞性提供 TestHelper）
+10. **Validator 模式**：測試方法總數以場景數為基準（上限 150%），同一屬性多個等價邊界用 `[Theory]`＋`[InlineData]` 合併；**規則 B**：validator 目標**保持 tests `.csproj` 不動**——禁止新增 `FluentValidation` PackageReference 或任何為取得它的 ProjectReference（既有 SUT ProjectReference 已傳遞性提供 TestHelper）。**本條刻意推翻 `fluentvalidation-testing` 技能的專案設定範例，不可視為冗餘刪除**
 11. **Legacy 模式**：Characterization Test 思維（記錄現有行為）；命名與 Assert 必須一致（名稱說 true、Assert 卻 BeFalse = 錯誤）；不為靜態資料中不存在的場景寫測試；不可滿足的邊界以 `// 注意：此邊界條件因靜態資料限制無法直接驗證` 註解記錄；直接 I/O 用 `IDisposable` 清理暫存檔，**清理邏輯集中於單一 `CleanupFiles()` 方法**、`Dispose()` 呼叫之；時間相依歷史日期用動態計算（`(DateTime.UtcNow - new DateTime(2024,1,1)).TotalDays + 30`），禁硬編天數
 12. **邊界值標註組成**：`new string('a', 91) + "@test.com" // 91 + 9 = 100 chars（剛好等於上限）`——先算固定部分再反算可變部分
 13. **InlineData 展開**：每個 `[InlineData]` 須測一個獨立邊界或等價類別代表值，避免冗餘展開；展開後測試案例數與場景清單合理對應（差距不超過 50%）
@@ -432,14 +441,16 @@ dotnet test <測試專案路徑> --no-build --verbosity minimal
 
 ## Step 6：回傳精簡摘要
 
-回傳給 Orchestrator：`status`（completed/partial）、`scenarioCount`、`testFilePaths`、`testMethodCount`、`testCaseCount`、`totalTests/passedTests/failedTests`、`fixRounds`、`skillsLoaded`、`scenariosFilePath`、`authorResultFilePath`。**不嵌入測試程式碼與中間過程。**
+回傳給 Orchestrator：`status`（completed/partial）、`testFilePaths`、`testMethodCount`、`testCaseCount`、`totalTests/passedTests/failedTests`、`fixRounds`、`skillsLoaded`、`scenariosFilePath`、`authorResultFilePath`。**不嵌入測試程式碼與中間過程。**
 
 ---
 
 ## 修改模式（mode: modification）
 
 1. Read 既有的 scenarios.json 與 author-result.json
-2. 依 `modificationRequest`（Reviewer 的 issues＋missingTestCases）修改既有測試：新增場景先**更新 scenarios.json**再寫測試；技能已知則按需補載（仍限白名單）
+2. 依 `modificationRequest`（Reviewer 的 issues＋missingTestCases）修改既有測試；技能已知則按需補載（仍限 `.agents/skills/`）
+   > ⚠️ **硬性順序（與初始流程 Step 1 同等強度）：新增或調整場景時，必須先把場景寫進 `scenarios.json`，才能改測試碼。**
+   > 禁止先改測試碼再回頭補場景——場景清單是可追溯的錨點，事後補寫使它退化為對帳用的記錄。
 3. 重跑 Step 4 建置修正迴圈至全綠
 4. 更新 author-result：`modificationType: "applied-reviewer-suggestions"`，更新計數欄位
 5. 回傳摘要含修改前後測試數變化
@@ -449,7 +460,7 @@ dotnet test <測試專案路徑> --no-build --verbosity minimal
 ## 重要原則
 
 1. **場景先行** — 交接檔是品質可追溯的錨點，Reviewer 會逐條對帳
-2. **Skills 優先** — 技術決策依已載入的 SKILL.md，不用自己的知識覆蓋（版本號除外，見版本適配）
-3. **白名單與載入守則不可違反** — 這是 lite 版的存在理由
+2. **技術決策以已載入的 SKILL.md 為準**，不用自己的知識覆蓋（版本號除外，見版本適配）；技能之間分層示範不一致時（基礎技能示範 `Assert.*`、進階技能示範 `.Should()`），以本契約明列的規則為準
+3. **只載你會用到的** — 技能來源是 `.agents/skills/`，選擇由當下需求決定；載入守則（只讀 SKILL.md 本文）不可違反
 4. **不改生產碼、不虛報結果** — 所有數字來自實際輸出
 5. **完整性** — 每個公開方法至少涵蓋：正常路徑、邊界條件、例外情境（以場景清單體現）

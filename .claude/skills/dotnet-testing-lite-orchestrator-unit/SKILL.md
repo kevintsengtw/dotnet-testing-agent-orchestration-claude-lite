@@ -11,7 +11,7 @@ description: >
 
 你是單元測試工作流程的指揮中心。你的工作是**調度與整合**，不自己讀原始碼、不寫任何程式碼、不執行 dotnet。
 
-> **架構**：主 session 載入本 Skill 後，以 Agent tool **循序**調度兩個 subagent：
+> **架構**：主線程載入本 Skill 後，以 Agent tool **循序**調度兩個 subagent：
 > `dotnet-testing-lite-author`（分析＋場景推導＋撰寫＋建置修正至全綠）→ `dotnet-testing-lite-reviewer`（獨立審查＋驗證執行＋coverage）。
 > subagent 的輸入需求定義在各自的「輸入契約」段落，按契約傳入即可。
 
@@ -30,15 +30,29 @@ description: >
 
 1. **禁止在啟動 Author 前讀任何原始碼／Grep 探索**——使用者提供的路徑與類別名稱已完全足夠組裝 prompt
 2. **禁止直接讀取任何 SKILL.md**（本檔除外）、**禁止撰寫或修改任何 .cs／.csproj**——包括套用 Reviewer 建議等增量修改，一律交給 Author
-3. **禁止跳過 Reviewer**——無論 Author 結果如何，Reviewer 一律執行
+3. **禁止跳過 Reviewer**——**只要 Author 產出了測試檔**，無論結果好壞一律執行
 4. subagent **必須且只能**透過 Agent tool 啟動（禁止 `Bash(claude ...)`）
 5. **嚴禁平行**——同一回應只能發出一個 Agent 呼叫；兩個 subagent 嚴格循序
+6. **不得解除或繞過環境保護**——Phase 0.1 的清理若遇 `Operation not permitted`／唯讀／immutable 旗標，**停止並向使用者說明**，禁止用 `chflags`／`chmod`／`sudo` 強行清除，也不得改用其他路徑規避
 
 ## Phase 0：單一目標守則
 
-解析使用者輸入。偵測到**多個被測試類別**（列舉多個類別名／檔案路徑、「Services/ 下所有類別」等模式）時：**不啟動任何 agent**，回覆說明本工作流程一次只處理一個類別，列出偵測到的目標與建議的逐次執行順序，請使用者分次下指令。
+解析使用者輸入。判定為**多目標**時：**不啟動任何 agent**，回覆說明本工作流程一次只處理一個類別，列出偵測到的目標與建議的逐次執行順序，請使用者分次下指令，**不代為執行**。
 
-「只測試某個方法」屬**範圍過濾**，不是多目標——照常執行並將過濾條件傳給 Author。
+### 多目標判定（強制規則，不容 run 間判斷差異）
+
+判準只有一條：**請求涉及的被測試類別是否為 2 個以上**。以下形態一律判為多目標，**依賴關係、主從關係、規模大小皆不影響判定**：
+
+| 形態 | 例 |
+|------|----|
+| 列舉多個類別名／檔案路徑（含多行「被測試目標：」） | 「被測試目標：A.cs」＋「被測試目標：B.cs」 |
+| 集合式指涉 | 「`Services/` 下所有類別」「所有 Validator」 |
+| 主目標＋附帶 | 「測 `OrderService`，順便看看 `OrderRepository`」「連同它的依賴一起」 |
+| 依賴／巢狀關係 | 「`OrderValidator` 和它的巢狀 `OrderItemValidator`」——**巢狀關係不使兩者合為單一目標** |
+
+**範圍過濾**則是「目標仍為單一類別，只縮小測試範圍」——如「只測 `ProcessOrder` 這個方法」「只測例外路徑」。照常執行，並將過濾條件傳給 Author。
+
+⛔ **判不準時一律視為多目標（fail-closed）**。誤拒的代價是使用者重下一次指令；誤放的代價是違反本工作流程的核心約束。
 
 ---
 
@@ -59,7 +73,7 @@ authorResultOutputPath: {testProjectDir}/.orchestrator/author-result/{ClassName}
 > 交接檔路徑由你計算：測試專案路徑去掉 `.csproj` 檔名即 `{testProjectDir}`。
 > ⚠️ 禁止在 prompt 中嵌入原始碼、分析內容或任何額外補充。
 
-**等候 Author 回傳精簡摘要**：`status`、`scenarioCount`、`testFilePaths`、`testMethodCount`、`testCaseCount`、`totalTests/passedTests/failedTests`、`fixRounds`、`skillsLoaded`、兩個交接檔路徑。
+**等候 Author 回傳精簡摘要**：`status`、`testFilePaths`、`testMethodCount`、`testCaseCount`、`totalTests/passedTests/failedTests`、`fixRounds`、`skillsLoaded`、兩個交接檔路徑。
 
 **驗證交接檔**：用 Glob 確認兩個交接檔存在；不存在則要求排查。
 
@@ -134,9 +148,10 @@ authorResultFilePath: {authorResultFilePath}
 
 ## 錯誤處理
 
-- **Author 失敗（找不到目標）**：向使用者確認路徑後重新啟動 Author（僅此情況可代為確認路徑，仍不讀原始碼內容）
+- **Author 失敗（找不到目標）**：無測試檔，Reviewer 不執行。向使用者確認路徑後重新啟動 Author（僅此情況可代為確認路徑，仍不讀原始碼內容）
 - **Author 回報 partial（3 輪修不完）**：如實呈現失敗測試清單，Reviewer 照常執行並將失敗納入審查；修正方向建議由 Reviewer 報告提供
 - **Reviewer 發現宣稱不一致**：在結果中顯著標示，提示使用者可啟動修改流程排查
+- **subagent 回報環境阻擋**（權限／唯讀／immutable）：**不代為排除**。向使用者說明受阻的路徑與原因，請使用者決定是否解除保護後再重跑；在使用者處理前不重新啟動該 agent
 
 ---
 

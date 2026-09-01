@@ -16,7 +16,7 @@
 │    Step 0    讀目標原始碼＋介面＋既有測試基礎設施掃描；targetType 判定
 │    Step 1    載入 unit-test-scenarios → 場景推導 → 寫 .orchestrator/scenarios/{Class}.scenarios.json
 │              ⚠ 硬性順序：先於任何測試碼
-│    Step 2    依 requiredTechniques 從白名單載入技能（.agents/skills/，fail-closed）
+│    Step 2    依 requiredTechniques 從 .agents/skills/ 載入技能（目錄即可用範圍，路徑不存在即中止）
 │    Step 3    撰寫測試（骨架範本、中文三段式、AwesomeAssertions；大檔分批寫入）
 │    Step 4    dotnet-test skill → build → test → 修正迴圈（≤3 輪，一輪批次修完）
 │    Step 5    寫 .orchestrator/author-result/{Class}.author-result.json
@@ -34,12 +34,12 @@
 
 ## 關鍵設計決策
 
-1. **修正迴圈放 Author**：建置錯誤的修正需要測試碼、原始碼、技術決策脈絡，全在 Author context 內且已被 prompt cache 覆蓋，增量成本只有錯誤訊息＋diff。獨立 Executor 每次冷啟動要付定義檔＋重讀（~7.5k token）且缺撰寫脈絡。
+1. **修正迴圈放 Author**：建置錯誤的修正需要測試碼、原始碼、技術決策脈絡，全在 Author context 內且已被 prompt cache 覆蓋，增量成本只有錯誤訊息＋diff。獨立 Executor 每次冷啟動要付定義檔＋重讀且缺撰寫脈絡。v1.1.0 以 n=3 對照實測過拆分方案，成本增加 17.2%（兩組範圍不重疊），測試數持平、耗時增加，本決策成立。
 2. **Reviewer 獨立且自己執行**：審查者沒寫過、沒修過這些測試（工具無 Edit/Write 是結構性保證），並以自己的一次 `dotnet test --collect` 同時取得執行事實與 coverage，coverage 蒐集零額外執行成本。
 3. **場景清單先行**：合併 Analyzer 後的紀律保險，Author 必須先把場景推導結果落檔，Reviewer 三方對帳，原始碼的 throw／分支／guard 若未入清單即為推導疏漏。
 4. **uncoverable 必附反證**：coverage 缺口宣告「不可覆蓋」必須說明為何無法從公開 API 觸發；`When`/`Unless` 中的短路條件預設視為可覆蓋。
 5. **嚴禁平行**：原版的 Writer 分割、多目標平行、跨檔一致性審查隨之整批移除。
-6. **退路**：若實測發現 Author context 過長影響品質，可將 Step 4 拆回獨立 Executor（1+3），定義檔已將該段寫為獨立章節以降低拆分成本。
+6. **退路**：若實測發現 Author context 過長影響品質，可將 Step 4 拆回獨立 Executor（1+3），定義檔已將該段寫為獨立章節以降低拆分成本。v1.1.0 已實作並量測該方案，因成本增加而未採用，故此處仍為退路而非現行架構。
 
 ## 交接檔
 
@@ -56,7 +56,7 @@
 |------|------|
 | 1+4（Analyzer/Writer/Executor/Reviewer） | 1+2（Author/Reviewer） |
 | Writer 可平行分割、多目標平行 | 嚴禁平行、單一類別上限 |
-| 技能於 `.agents/skills/` 全量 29 個可載 | 白名單 14＋dotnet-test，載入守則收緊 |
+| 技能於 `.agents/skills/` 全量 29 個可載 | bundle 18 個單元測試相關技能＋dotnet-test；排除 Bogus 系列與 advanced 系列，載入守則收緊 |
 | Reviewer 定性審查、無 coverage 實測 | Reviewer 獨立執行＋目標類別 line/branch 實測 |
 | analysis.json 完整交接 | scenarios.json 精簡清單 |
 | 場景推導規則寫在 Analyzer 定義檔 | 載入 unit-test-scenarios 技能＋定義檔專項補充 |
