@@ -29,9 +29,10 @@ const os = require("os");
 const crypto = require("crypto");
 
 const SCHEMA_VERSION = 2;
-const SUBAGENT_PREFIX = "dotnet-testing-"; // 只計 orchestrator 的 subagent，排除 Explore / general-purpose
+const SUBAGENT_PREFIX = "dotnet-testing-lite-"; // 只計本工作流程的 subagent；排除 Explore / general-purpose，
+                                                // 以及同一專案若並存 full 版時的 dotnet-testing-analyzer/writer/executor/reviewer
 const CLEANUP_MARKERS = ["cleanup", "清理"]; // 描述含這些字的 subagent 視為清理任務，不計入用量
-const ROLE_ORDER = ["orchestrator", "analyzer", "writer", "executor", "reviewer"];
+const ROLE_ORDER = ["orchestrator", "author", "reviewer"]; // lite 為 1+2 架構
 const CLUSTER_GAP_SECONDS = 1800; // 無 marker 時，以此間隔切出「最近一次工作流程」的 subagent 群
 
 // ---------------------------------------------------------------------------
@@ -79,6 +80,20 @@ function encodeProjectPath(p) {
 
 function addCommas(n) {
   return Math.trunc(Number(n) || 0).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+}
+
+// 耗時（取自 subagent transcript 的時間窗 hi − lo，不依賴 hook）
+function fmtDuration(seconds) {
+  if (seconds === null || seconds === undefined || seconds === "") return "—";
+  const n = Number(seconds);
+  if (!Number.isFinite(n) || n < 0) return "—";
+  const t = Math.round(n);
+  const h = Math.floor(t / 3600);
+  const m = Math.floor((t % 3600) / 60);
+  const sec = t % 60;
+  return h > 0
+    ? h + ":" + String(m).padStart(2, "0") + ":" + String(sec).padStart(2, "0")
+    : m + ":" + String(sec).padStart(2, "0");
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +216,8 @@ function fileTimeRange(p) {
 }
 
 // 回傳 [{metaFile, jsonlFile, agentType, lo, hi}]，僅 dotnet-testing-* 前綴、排除清理任務。
-function listWorkflowSubagents(transcriptPath) {
+function listWorkflowSubagents(transcriptPath, opts) {
+  const includeCleanup = !!(opts && opts.includeCleanup);
   const out = [];
   const sdir = subagentsDirFor(transcriptPath);
   let names;
@@ -221,13 +237,14 @@ function listWorkflowSubagents(transcriptPath) {
     }
     const at = String((meta && meta.agentType) || "");
     if (!at.startsWith(SUBAGENT_PREFIX)) continue;
-    // 排除清理任務（Phase 0 前置 / Phase 5 後置都用 Executor 做 cleanup）。
+    // 清理任務（Phase 0 前置 / Phase 5 後置的 cleanup）不計入用量。
     const desc = String((meta && meta.description) || "").toLowerCase();
-    if (CLEANUP_MARKERS.some((mk) => desc.indexOf(mk) !== -1)) continue;
+    const cleanup = CLEANUP_MARKERS.some((mk) => desc.indexOf(mk) !== -1);
+    if (cleanup && !includeCleanup) continue;
     const jf = path.join(sdir, name.slice(0, -".meta.json".length) + ".jsonl");
     if (!fs.existsSync(jf)) continue;
     const [lo, hi] = fileTimeRange(jf);
-    out.push({ metaFile, jsonlFile: jf, agentType: at, lo, hi });
+    out.push({ metaFile, jsonlFile: jf, agentType: at, lo, hi, cleanup });
   }
   return out;
 }
@@ -307,7 +324,52 @@ function aggregate(transcriptPath, start, end) {
 
   const total = new Bucket();
   for (const k of Object.keys(scopes)) merge(total, scopes[k]);
-  return { scopes, models, subagents, total };
+  return { scopes, models, subagents, total, durations: collectDurations(transcriptPath, st, en) };
+}
+
+// 各 subagent 的耗時（hi − lo）與階段耗時：同階段時間窗重疊（平行）取最長者，
+// 完全不重疊（循序）則相加；總計為兩階段取整後之和，使顯示值封閉。
+// cleanup 另列，不計入總計。
+function collectDurations(transcriptPath, st, en) {
+  const byRole = {};
+  const cleanups = [];
+  for (const s of listWorkflowSubagents(transcriptPath, { includeCleanup: true })) {
+    const { agentType, lo, hi, cleanup, jsonlFile } = s;
+    if (lo === null || hi === null) continue;
+    if (hi.getTime() < st || lo.getTime() > en) continue;
+    const parts = agentType.split("-");
+    const role = parts[parts.length - 1] || "subagent";
+    const seconds = (hi.getTime() - lo.getTime()) / 1000;
+    const row = { role, agentType, file: path.basename(jsonlFile), seconds, lo: lo.getTime(), hi: hi.getTime() };
+    if (cleanup) {
+      cleanups.push(row);
+      continue;
+    }
+    (byRole[role] || (byRole[role] = [])).push(row);
+  }
+  const phases = [];
+  let totalSeconds = 0;
+  for (const role of ROLE_ORDER) {
+    const rows = byRole[role];
+    if (!rows || !rows.length) continue;
+    const parallel = hasOverlap(rows);
+    const seconds = parallel
+      ? Math.max.apply(null, rows.map((r) => r.seconds))
+      : rows.reduce((a, r) => a + r.seconds, 0);
+    phases.push({ role, seconds, parallel, rows });
+    totalSeconds += Math.round(seconds);
+  }
+  return { phases, cleanups, totalSeconds };
+}
+
+// 同階段的任兩列 [lo, hi] 有交集即視為平行；單列一律視為平行（不影響取值）。
+function hasOverlap(rows) {
+  if (rows.length < 2) return true;
+  const sorted = rows.slice().sort((a, b) => a.lo - b.lo);
+  for (let i = 1; i < sorted.length; i += 1) {
+    if (sorted[i].lo < sorted[i - 1].hi) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +396,7 @@ function projectDir() {
     if (parent === p) break;
     p = parent;
   }
-  return path.resolve(__dirname, "..", "..", ".."); // 後備：token-usage → scripts → .claude → repo
+  return path.resolve(__dirname, "..", "..", ".."); // 後備：dotnet-testing-claude-lite → scripts → .claude → repo
 }
 
 let _reportsDirOverride = null; // selftest 用：將報告/ledger 導向暫存目錄
@@ -343,10 +405,10 @@ function setReportsDirOverride(p) {
 }
 function reportsDir() {
   if (_reportsDirOverride !== null) return _reportsDirOverride;
-  return path.join(projectDir(), "token-usage-reports");
+  return path.join(projectDir(), "token-usage-reports", "lite");
 }
 function stateDir() {
-  return path.join(projectDir(), ".token-usage-state");
+  return path.join(projectDir(), ".token-usage-state", "lite");
 }
 function nowUtc() {
   return new Date();
@@ -406,9 +468,7 @@ function costFor(models, rates) {
 
 const SCOPE_LABEL = {
   orchestrator: "Orchestrator（主執行緒）",
-  analyzer: "Analyzer",
-  writer: "Writer",
-  executor: "Executor",
+  author: "Author",
   reviewer: "Reviewer",
 };
 
@@ -438,6 +498,35 @@ function fmtUtc(d) {
     d.getUTCFullYear() + "-" + pad2(d.getUTCMonth() + 1) + "-" + pad2(d.getUTCDate()) +
     " " + pad2(d.getUTCHours()) + ":" + pad2(d.getUTCMinutes()) + ":" + pad2(d.getUTCSeconds()) + "Z"
   );
+}
+
+// ⏱ 各階段耗時表：階段耗時＝同階段最長者（循序則相加），總計＝兩階段取整後之和；cleanup 另列不計入。
+function renderDurationTable(result) {
+  const d = (result && result.durations) || { phases: [], cleanups: [], totalSeconds: 0 };
+  const L = [];
+  L.push("### ⏱ 各階段耗時");
+  L.push("");
+  L.push("| 階段 | 耗時 | 明細 |");
+  L.push("| --- | ---: | --- |");
+  if (!d.phases.length && !d.cleanups.length) {
+    L.push("| （無 subagent 紀錄） | — | — |");
+    return L.join("\n");
+  }
+  for (const ph of d.phases) {
+    const detail =
+      ph.rows.length > 1
+        ? ph.rows.map((r) => fmtDuration(r.seconds)).join(" / ") +
+          "（" + ph.rows.length + (ph.parallel ? " 個平行）" : " 個循序）")
+        : "";
+    L.push("| " + scopeLabel(ph.role) + " | " + fmtDuration(ph.seconds) + " | " + detail + " |");
+  }
+  L.push("| **總計** | **" + fmtDuration(d.totalSeconds) + "** | 兩階段之和 |");
+  for (const c of d.cleanups) {
+    L.push("| cleanup（" + scopeLabel(c.role) + "） | " + fmtDuration(c.seconds) + " | 不計入總計 |");
+  }
+  L.push("");
+  L.push("> 耗時取自各 subagent transcript 的時間窗（最後一筆 − 第一筆）；階段耗時為同階段最長者，循序執行則相加。");
+  return L.join("\n");
 }
 
 function renderCompactTable(meta, result) {
@@ -528,26 +617,32 @@ function renderReportMd(meta, result) {
     L.push("| 模型 | 估算成本 (USD) |", "| --- | ---: |");
     for (const name of Object.keys(per).sort()) L.push("| " + name + " | " + per[name].toFixed(4) + " |");
     L.push("| **合計** | **" + tot.toFixed(4) + "** |", "",
-      "> 單價取自 `token-usage-reports/pricing.config.json`，以 https://docs.claude.com/en/docs/about-claude/pricing 為準。");
+      "> 單價取自 `token-usage-reports/lite/pricing.config.json`，以 https://docs.claude.com/en/docs/about-claude/pricing 為準。");
   } else {
-    L.push("未設定單價（`token-usage-reports/pricing.config.json` 不存在或為空），略過成本估算。", "",
+    L.push("未設定單價（`token-usage-reports/lite/pricing.config.json` 不存在或為空），略過成本估算。", "",
       "> 如需成本：填入各模型每百萬 token 單價，以 https://docs.claude.com/en/docs/about-claude/pricing 為準。");
   }
   if (subagents.length) {
     L.push("", "## Subagent 明細", "",
-      "| 檔案 | agentType | 純input | cache寫入 | cache讀取 | output |",
-      "| --- | --- | ---: | ---: | ---: | ---: |");
+      "| 檔案 | agentType | 耗時 | 純input | cache寫入 | cache讀取 | output |",
+      "| --- | --- | ---: | ---: | ---: | ---: | ---: |");
+    const durOf = {};
+    for (const ph of ((result.durations && result.durations.phases) || [])) {
+      for (const r of ph.rows) durOf[r.file] = r.seconds;
+    }
     for (const s of subagents) {
       L.push(
-        "| `" + s.file + "` | " + s.agentType + " | " + addCommas(s.pure_input) + " | " +
+        "| `" + s.file + "` | " + s.agentType + " | " + fmtDuration(durOf[s.file]) + " | " +
+        addCommas(s.pure_input) + " | " +
         addCommas(s.cache_write) + " | " + addCommas(s.cache_read) + " | " + addCommas(s.output) + " |"
       );
     }
   }
+  L.push("", "## 各階段耗時", "", renderDurationTable(result).split("\n").slice(1).join("\n").trim());
   L.push("", "## 備註", "",
     "- `cache 讀取` 為各回合累積讀取量（與 ccusage 同口徑），非唯一 token 數。",
     "- 涵蓋範圍：主 transcript（Orchestrator）＋ `subagents/` 中 `agentType` 以 " +
-      "`dotnet-testing-` 開頭的 subagent；`Explore` / `general-purpose` 不計入。", "");
+      "`dotnet-testing-lite-` 開頭的 subagent；`Explore` / `general-purpose` 與 full 版的 subagent 不計入。", "");
   return L.join("\n");
 }
 
@@ -860,7 +955,7 @@ function skipMessage() {
     "（找不到當前 session transcript，略過 token 統計）\n" +
     `（診斷：${reason}；projectDir=${info.projectDir}；encodedDir存在=${info.encodedDirExists}；` +
     `jsonl數=${info.jsonlCount}；sessions-index=${info.hasSessionsIndex}。` +
-    "完整診斷：node .claude/scripts/token-usage/token_usage.js locate）\n"
+    "完整診斷：node .claude/scripts/dotnet-testing-claude-lite/token_usage.js locate）\n"
   );
 }
 
@@ -921,6 +1016,7 @@ function cmdReport(framework, opts) {
     /* 鐵則：寫檔失敗不影響輸出 */
   }
   process.stdout.write(renderCompactTable(meta, result) + "\n");
+  process.stdout.write(renderDurationTable(result) + "\n");
   return 0;
 }
 
@@ -954,14 +1050,20 @@ function cmdSelftest() {
     fs.writeFileSync(path.join(sdir, name + ".meta.json"), JSON.stringify({ agentType: at, description: name }));
     fs.writeFileSync(path.join(sdir, name + ".jsonl"), rowsU.map((u, i) => row(TS(7 + i), u, "claude-sonnet-4-6", true)).join("\n") + "\n");
   };
-  mk("agent-1", "dotnet-testing-analyzer", [{ input_tokens: 30, cache_creation_input_tokens: 1000, cache_read_input_tokens: 2000, output_tokens: 400 }]);
-  mk("agent-2", "dotnet-testing-writer", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 700 }]);
-  mk("agent-3", "dotnet-testing-writer", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 800 }]);
+  // 兩列（10:07→10:08）以產生非零耗時；四項總和仍為 30/1000/2000/400，token 斷言不受影響。
+  mk("agent-1", "dotnet-testing-lite-author", [
+    { input_tokens: 20, cache_creation_input_tokens: 600, cache_read_input_tokens: 1200, output_tokens: 250 },
+    { input_tokens: 10, cache_creation_input_tokens: 400, cache_read_input_tokens: 800, output_tokens: 150 },
+  ]);
+  mk("agent-2", "dotnet-testing-lite-author", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 700 }]);
+  mk("agent-3", "dotnet-testing-lite-author", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 800 }]);
   mk("agent-x", "Explore", [{ input_tokens: 88888, output_tokens: 88888 }]);
-  mk("agent-4", "dotnet-testing-reviewer", [{ input_tokens: 7, output_tokens: 9 }]);
-  fs.writeFileSync(path.join(sdir, "agent-cleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-executor", description: "cleanup" }));
+  // 同一專案並存 full 版時的 subagent：前綴不符，須完全排除（C 類計量隔離）
+  mk("agent-f", "dotnet-testing-analyzer", [{ input_tokens: 77777, output_tokens: 77777 }]);
+  mk("agent-4", "dotnet-testing-lite-reviewer", [{ input_tokens: 7, output_tokens: 9 }]);
+  fs.writeFileSync(path.join(sdir, "agent-cleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-lite-author", description: "cleanup" }));
   fs.writeFileSync(path.join(sdir, "agent-cleanup.jsonl"), row("2026-06-04T09:00:00.000Z", { input_tokens: 12345, cache_creation_input_tokens: 5000, cache_read_input_tokens: 5000, output_tokens: 6789 }, "claude-sonnet-4-6", true) + "\n");
-  fs.writeFileSync(path.join(sdir, "agent-endcleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-executor", description: "清理 orchestrator 暫存目錄" }));
+  fs.writeFileSync(path.join(sdir, "agent-endcleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-lite-author", description: "清理 orchestrator 暫存目錄" }));
   fs.writeFileSync(path.join(sdir, "agent-endcleanup.jsonl"), row(TS(8), { input_tokens: 7777, cache_creation_input_tokens: 7777, cache_read_input_tokens: 7777, output_tokens: 7777 }, "claude-sonnet-4-6", true) + "\n");
 
   const start = parseTs("2026-06-04T10:00:00.000Z");
@@ -974,23 +1076,35 @@ function cmdSelftest() {
   const o = sc.orchestrator || new Bucket();
   chk("orchestrator pure=110/cW=200/cR=1300/out=55", o.pure_input === 110 && o.cache_write === 200 && o.cache_read === 1300 && o.output === 55);
   chk("窗外行(99999)被排除", o.pure_input === 110);
-  const an = sc.analyzer || new Bucket();
-  chk("analyzer pure=30/out=400", an.pure_input === 30 && an.output === 400);
-  const wr = sc.writer || new Bucket();
-  chk("writer 聚合 pure=10/out=1500/count=2", wr.pure_input === 10 && wr.output === 1500 && wr.count === 2);
+  const au = sc.author || new Bucket();
+  chk("author 聚合 pure=40/out=1900/count=3", au.pure_input === 40 && au.output === 1900 && au.count === 3);
   const rv = sc.reviewer || new Bucket();
   chk("reviewer 缺cache→0, pure=7/out=9", rv.cache_write === 0 && rv.cache_read === 0 && rv.pure_input === 7 && rv.output === 9);
   chk("Explore 被排除", !("Explore" in sc) && !("explore" in sc));
+  chk("full 版 subagent 被排除（無 analyzer scope）", !("analyzer" in sc));
+  chk("full 版 77777 不污染 total", total.pure_input < 77777 && total.output < 77777);
   chk("Explore 不污染 total", total.pure_input < 88888);
-  const expIwc = 110 + 200 + 1300 + (30 + 1000 + 2000) + (10 + 200 + 1000) + (7 + 0 + 0);
+  const expIwc = 110 + 200 + 1300 + (40 + 1200 + 3000) + (7 + 0 + 0);
   chk("含快取 input 合計=" + expIwc, total.input_with_cache === expIwc);
-  chk("total output=" + (55 + 400 + 1500 + 9), total.output === 55 + 400 + 1500 + 9);
+  chk("total output=" + (55 + 1900 + 9), total.output === 55 + 1900 + 9);
   chk("models 不含 Explore 88888", Object.values(res.models).every((b) => b.pure_input < 88888));
-  chk("Phase 0 cleanup executor(窗外)被排除（無 executor scope）", !("executor" in sc));
-  chk("Phase 5 cleanup executor(窗內,描述含清理)被描述過濾排除", !("executor" in sc));
-  chk("cleanup 的 12345/7777 未污染 total", total.pure_input === 110 + 30 + 10 + 7);
+  chk("Phase 0 cleanup(窗外)被排除，未計入 author", au.count === 3);
+  chk("Phase 5 cleanup(窗內,描述含清理)被描述過濾排除", au.pure_input === 40);
+  chk("cleanup 的 12345/7777 未污染 total", total.pure_input === 110 + 40 + 7);
   const cs = latestClusterStart(main);
   chk("latest_cluster_start 命中最早 subagent(10:07)，未含 09:00 cleanup", cs && cs.getTime() === parseTs(TS(7)).getTime());
+  // 耗時：ROLE_ORDER 決定 phases 的取值與順序，漏掉角色不會報錯，故明確斷言
+  const du = res.durations;
+  chk("durations 有兩階段且順序為 author→reviewer",
+    du.phases.length === 2 && du.phases[0].role === "author" && du.phases[1].role === "reviewer");
+  chk("author 耗時取同階段最長者=60s", du.phases[0].seconds === 60);
+  chk("reviewer 單列耗時=0s", du.phases[1].seconds === 0);
+  chk("totalSeconds=60（兩階段取整之和）", du.totalSeconds === 60);
+  chk("窗內 cleanup 另列、不計入 phases", du.cleanups.length === 1 && du.cleanups[0].seconds === 0);
+  chk("fmtDuration 60→1:00 / 3661→1:01:01 / 無值→—",
+    fmtDuration(60) === "1:00" && fmtDuration(3661) === "1:01:01" && fmtDuration(null) === "—");
+  chk("耗時表含 Author 與 Reviewer 兩列",
+    renderDurationTable(res).indexOf("| Author |") !== -1 && renderDurationTable(res).indexOf("| Reviewer |") !== -1);
   const meta = { run_id: "selftest", session_id: sid, framework: "unit", framing: "marker", start_ts: start.toISOString(), end_ts: end.toISOString(), host_platform: process.platform };
   try {
     const md = renderReportMd(meta, res);
@@ -1137,7 +1251,10 @@ module.exports = {
   SCOPE_LABEL,
   orderedScopes,
   renderCompactTable,
+  renderDurationTable,
   renderReportMd,
+  collectDurations,
+  fmtDuration,
   ledgerEntry,
   upsertLedger,
   writeReportFiles,

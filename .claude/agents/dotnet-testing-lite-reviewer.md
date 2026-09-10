@@ -88,7 +88,7 @@ dotnet test <測試專案路徑> --collect:"XPlat Code Coverage" \
 ## Step 3：coverage 摘要
 
 ```bash
-node .claude/scripts/coverage-summary.mjs \
+node .claude/scripts/dotnet-testing-claude-lite/coverage-summary.mjs \
   --coverage-dir <測試專案目錄>/.orchestrator/coverage/ \
   --target-class <ClassName> \
   --target-source <被測試目標檔案路徑>

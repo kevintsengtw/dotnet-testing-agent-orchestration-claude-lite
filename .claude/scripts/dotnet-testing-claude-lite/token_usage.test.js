@@ -39,19 +39,25 @@ function buildFixture() {
     const lines = rowsU.map((u, i) => row(TS(7 + i), u, "claude-sonnet-4-6", true));
     fs.writeFileSync(path.join(sdir, name + ".jsonl"), lines.join("\n") + "\n");
   };
-  mk("agent-1", "dotnet-testing-analyzer", [{ input_tokens: 30, cache_creation_input_tokens: 1000, cache_read_input_tokens: 2000, output_tokens: 400 }]);
-  mk("agent-2", "dotnet-testing-writer", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 700 }]);
-  mk("agent-3", "dotnet-testing-writer", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 800 }]);
+  // 兩列（10:07→10:08）以產生非零耗時；四項總和仍為 30/1000/2000/400，token 斷言不受影響。
+  mk("agent-1", "dotnet-testing-lite-author", [
+    { input_tokens: 20, cache_creation_input_tokens: 600, cache_read_input_tokens: 1200, output_tokens: 250 },
+    { input_tokens: 10, cache_creation_input_tokens: 400, cache_read_input_tokens: 800, output_tokens: 150 },
+  ]);
+  mk("agent-2", "dotnet-testing-lite-author", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 700 }]);
+  mk("agent-3", "dotnet-testing-lite-author", [{ input_tokens: 5, cache_creation_input_tokens: 100, cache_read_input_tokens: 500, output_tokens: 800 }]);
   mk("agent-x", "Explore", [{ input_tokens: 88888, output_tokens: 88888 }]);
-  mk("agent-4", "dotnet-testing-reviewer", [{ input_tokens: 7, output_tokens: 9 }]);
-  // Phase 0 cleanup executor：時間早於 window（09:00）
-  fs.writeFileSync(path.join(sdir, "agent-cleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-executor", description: "cleanup" }));
+  // 同一專案並存 full 版時的 subagent：前綴不符，須完全排除（C 類計量隔離）
+  mk("agent-f", "dotnet-testing-analyzer", [{ input_tokens: 77777, output_tokens: 77777 }]);
+  mk("agent-4", "dotnet-testing-lite-reviewer", [{ input_tokens: 7, output_tokens: 9 }]);
+  // Phase 0 cleanup：時間早於 window（09:00）
+  fs.writeFileSync(path.join(sdir, "agent-cleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-lite-author", description: "cleanup" }));
   fs.writeFileSync(
     path.join(sdir, "agent-cleanup.jsonl"),
     row("2026-06-04T09:00:00.000Z", { input_tokens: 12345, cache_creation_input_tokens: 5000, cache_read_input_tokens: 5000, output_tokens: 6789 }, "claude-sonnet-4-6", true) + "\n"
   );
-  // Phase 5 末段 cleanup executor：在 window 內（10:08），但描述含「清理」
-  fs.writeFileSync(path.join(sdir, "agent-endcleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-executor", description: "清理 orchestrator 暫存目錄" }));
+  // Phase 5 末段 cleanup：在 window 內（10:08），但描述含「清理」
+  fs.writeFileSync(path.join(sdir, "agent-endcleanup.meta.json"), JSON.stringify({ agentType: "dotnet-testing-lite-author", description: "清理 orchestrator 暫存目錄" }));
   fs.writeFileSync(
     path.join(sdir, "agent-endcleanup.jsonl"),
     row(TS(8), { input_tokens: 7777, cache_creation_input_tokens: 7777, cache_read_input_tokens: 7777, output_tokens: 7777 }, "claude-sonnet-4-6", true) + "\n"
@@ -153,27 +159,46 @@ section("Phase 2: aggregate");
   const o = sc.orchestrator || new T.Bucket();
   chk("orchestrator pure=110/cW=200/cR=1300/out=55", o.pure_input === 110 && o.cache_write === 200 && o.cache_read === 1300 && o.output === 55);
   chk("窗外行(99999)被排除", o.pure_input === 110);
-  const an = sc.analyzer || new T.Bucket();
-  chk("analyzer pure=30/out=400", an.pure_input === 30 && an.output === 400);
-  const wr = sc.writer || new T.Bucket();
-  chk("writer 聚合 pure=10/out=1500/count=2", wr.pure_input === 10 && wr.output === 1500 && wr.count === 2);
+  const au = sc.author || new T.Bucket();
+  chk("author 聚合 pure=40/out=1900/count=3", au.pure_input === 40 && au.output === 1900 && au.count === 3);
   const rv = sc.reviewer || new T.Bucket();
   chk("reviewer 缺cache→0, pure=7/out=9", rv.cache_write === 0 && rv.cache_read === 0 && rv.pure_input === 7 && rv.output === 9);
   chk("Explore 被排除", !("Explore" in sc) && !("explore" in sc));
+  chk("full 版 subagent 被排除（無 analyzer scope）", !("analyzer" in sc));
+  chk("full 版 77777 不污染 total", total.pure_input < 77777 && total.output < 77777);
+  chk("full 版 subagent 不進 durations", res.durations.phases.every((p) => p.role !== "analyzer"));
   chk("Explore 不污染 total", total.pure_input < 88888);
-  const expIwc = 110 + 200 + 1300 + (30 + 1000 + 2000) + (10 + 200 + 1000) + (7 + 0 + 0);
+  const expIwc = 110 + 200 + 1300 + (40 + 1200 + 3000) + (7 + 0 + 0);
   chk("含快取 input 合計=" + expIwc, total.input_with_cache === expIwc);
-  chk("total output=" + (55 + 400 + 1500 + 9), total.output === 55 + 400 + 1500 + 9);
+  chk("total output=" + (55 + 1900 + 9), total.output === 55 + 1900 + 9);
   chk("models 不含 Explore 88888", Object.values(res.models).every((b) => b.pure_input < 88888));
-  chk("Phase 0 cleanup executor(窗外)被排除（無 executor scope）", !("executor" in sc));
-  chk("Phase 5 cleanup executor(窗內,描述含清理)被描述過濾排除", !("executor" in sc));
-  chk("cleanup 的 12345/7777 未污染 total", total.pure_input === 110 + 30 + 10 + 7);
+  chk("Phase 0 cleanup(窗外)被排除，未計入 author", au.count === 3);
+  chk("Phase 5 cleanup(窗內,描述含清理)被描述過濾排除", au.pure_input === 40);
+  chk("cleanup 的 12345/7777 未污染 total", total.pure_input === 110 + 40 + 7);
 
   const cs = T.latestClusterStart(fx.main);
   chk("latestClusterStart 命中最早 subagent(10:07)，未含 09:00 cleanup", cs && cs.getTime() === T.parseTs("2026-06-04T10:07:00.000Z").getTime());
 
-  const [lo, hi] = T.fileTimeRange(path.join(fx.tmp, fx.sid, "subagents", "agent-1.jsonl"));
+  const [lo, hi] = T.fileTimeRange(path.join(fx.tmp, fx.sid, "subagents", "agent-2.jsonl"));
   chk("fileTimeRange 單行範圍", lo && hi && lo.getTime() === T.parseTs("2026-06-04T10:07:00.000Z").getTime() && hi.getTime() === lo.getTime());
+  const [mlo, mhi] = T.fileTimeRange(path.join(fx.tmp, fx.sid, "subagents", "agent-1.jsonl"));
+  chk("fileTimeRange 多行範圍(10:07→10:08)",
+    mlo && mhi && mlo.getTime() === T.parseTs("2026-06-04T10:07:00.000Z").getTime()
+    && mhi.getTime() === T.parseTs("2026-06-04T10:08:00.000Z").getTime());
+
+  // 耗時：ROLE_ORDER 決定 phases 的取值與順序，漏掉角色不會報錯，故明確斷言
+  const du = res.durations;
+  chk("durations 有兩階段且順序為 author→reviewer",
+    du.phases.length === 2 && du.phases[0].role === "author" && du.phases[1].role === "reviewer");
+  chk("author 耗時取同階段最長者=60s", du.phases[0].seconds === 60);
+  chk("reviewer 單列耗時=0s", du.phases[1].seconds === 0);
+  chk("totalSeconds=60（兩階段取整之和）", du.totalSeconds === 60);
+  chk("窗內 cleanup 另列、不計入 phases", du.cleanups.length === 1);
+  chk("fmtDuration 60→1:00 / 3661→1:01:01 / 無值→—",
+    T.fmtDuration(60) === "1:00" && T.fmtDuration(3661) === "1:01:01" && T.fmtDuration(null) === "—");
+  const dt = T.renderDurationTable(res);
+  chk("耗時表含 Author 與 Reviewer 兩列", dt.indexOf("| Author |") !== -1 && dt.indexOf("| Reviewer |") !== -1);
+  chk("耗時表總計 1:00", dt.indexOf("**1:00**") !== -1);
 
   fs.rmSync(fx.tmp, { recursive: true, force: true });
 }
@@ -202,7 +227,7 @@ section("Phase 3: render / ledger / writeReportFiles");
   chk("compact 含標題", ct.indexOf("### 📊 本次測試工作流程 Token 用量") !== -1);
   chk("compact 含三分項表頭", ct.indexOf("純input | cache寫入 | cache讀取 | 含快取input") !== -1);
   chk("compact 含總計 5,857", ct.indexOf("**5,857**") !== -1);
-  chk("compact 含 Writer×2", ct.indexOf("Writer×2") !== -1);
+  chk("compact 含 Author×3", ct.indexOf("Author×3") !== -1);
   chk("compact 未設單價→無成本行", ct.indexOf("估算成本") === -1);
 
   const md = T.renderReportMd(meta, res);
@@ -218,7 +243,7 @@ section("Phase 3: render / ledger / writeReportFiles");
   chk("ledgerEntry schema_version=2", entry.schema_version === 2);
   chk("ledgerEntry totals.input_with_cache=5857", entry.totals.input_with_cache === 5857);
   chk("ledgerEntry framing/cost", entry.framing === "marker" && entry.cost === null);
-  chk("ledgerEntry scopes 含 writer count=2", entry.scopes.writer && entry.scopes.writer.count === 2);
+  chk("ledgerEntry scopes 含 author count=3", entry.scopes.author && entry.scopes.author.count === 3);
 
   // upsert 冪等 + writeReportFiles，導向暫存目錄避免污染 repo
   const repTmp = fs.mkdtempSync(path.join(os.tmpdir(), "tu_reports_"));

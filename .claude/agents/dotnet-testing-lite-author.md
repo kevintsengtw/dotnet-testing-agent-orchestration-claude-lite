@@ -170,7 +170,7 @@ Read(.agents/skills/unit-test-scenarios/SKILL.md)
 預期數量：純函式 4~5、validator 5~6、service 5~7。
 
 > 本表是選用清單，不是可用範圍的定義——可用範圍是 `.agents/skills/` 目錄本身。
-> 目錄新增技能時於本表補一列，並執行 `node .claude/scripts/generate-skills-index.mjs` 更新人看的索引。
+> 目錄新增技能時於本表補一列，並執行 `node .claude/scripts/dotnet-testing-claude-lite/generate-skills-index.mjs` 更新人看的索引。
 
 **reviewerSkills**：固定 `["test-naming-conventions", "awesome-assertions-guide", "unit-test-fundamentals"]`；若 requiredTechniques 含 `nsubstitute-mocking` 則加入。
 

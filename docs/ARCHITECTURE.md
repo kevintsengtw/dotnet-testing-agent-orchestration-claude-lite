@@ -28,7 +28,7 @@
 │    Step 4    三方對帳（scenarios.json ↔ 測試檔 ↔ 原始碼）＋審查檢查表
 │              coverage 缺口逐項判定 testable / uncoverable（uncoverable 必附反證）
 │
-│  Phase 3  整合呈現＋耗時表＋token 報表
+│  Phase 3  整合呈現＋token 用量與各階段耗時兩張表
 └─ 修改流程（使用者同意後）：Author(modification) → Reviewer(re-review，重跑 coverage)
 ```
 

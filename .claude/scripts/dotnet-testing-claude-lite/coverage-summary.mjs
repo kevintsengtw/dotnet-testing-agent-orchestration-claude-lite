@@ -4,7 +4,7 @@
 // 找不到目標類別時 fail-closed（exit 1），不退回 assembly 平均值。
 //
 // 用法：
-//   node .claude/scripts/coverage-summary.mjs \
+//   node .claude/scripts/dotnet-testing-claude-lite/coverage-summary.mjs \
 //     --coverage-dir <dir>      # 遞迴尋找最新的 coverage.cobertura.xml
 //     --target-class <Name>     # 目標類別名稱（不含 namespace）
 //     --target-source <path>    # 目標原始碼路徑（以檔名比對 filename 屬性）

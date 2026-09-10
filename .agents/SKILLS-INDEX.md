@@ -1,4 +1,4 @@
-<!-- 本檔由 .claude/scripts/generate-skills-index.mjs 自動生成，請勿手動編輯。 -->
+<!-- 本檔由 .claude/scripts/dotnet-testing-claude-lite/generate-skills-index.mjs 自動生成，請勿手動編輯。 -->
 # 可用技能索引
 
 本目錄下的技能即本工作流程的可用範圍——**目錄裡沒有的技能不存在**，不需要額外的白名單規則。

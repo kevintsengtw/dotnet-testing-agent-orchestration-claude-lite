@@ -23,7 +23,7 @@ description: >
 
 1. **單一目標檢查**（Phase 0）— 多目標即拒絕，見下
 2. `Bash(rm -rf "{testProjectDir}/.orchestrator/")` — 清理殘留（Phase 0.1）
-3. `Bash(node .claude/scripts/token-usage/token_usage.js start unit 2>/dev/null)` — 標記計量起點（best-effort，失敗即略過）（Phase 0.2）
+3. `Bash(node .claude/scripts/dotnet-testing-claude-lite/token_usage.js start unit 2>/dev/null)` — 標記計量起點（best-effort，失敗即略過）（Phase 0.2）
 4. **立即啟動 Author**（Phase 1）
 
 ## ⛔ 硬性禁止條款
@@ -105,26 +105,16 @@ authorResultFilePath: {authorResultFilePath}
 7. **修正紀錄**：`fixRounds` 與修正內容（如有）
 8. **Production 重構建議**（僅當 Reviewer 回傳 `productionRefactorOptIn`）：顯著呈現，明確標示**需使用者同意才會修改 production**，預設不修改
 
-### ⏱ 各階段耗時（必須輸出）
-
-時間由 PreToolUse／PostToolUse hooks 自動注入 Agent 回傳結果的 `additionalContext`（未安裝 hooks 時略過此表）：
-
-```markdown
-| 階段 | 耗時 |
-|------|------|
-| 階段 1 Author   | M 分 S 秒 |
-| 階段 2 Reviewer | M 分 S 秒 |
-| **總計**        | **M 分 S 秒** |
-```
-
-### 📊 Token 用量（強制最終輸出）
+### 📊 Token 用量與各階段耗時（強制最終輸出）
 
 ⛔ **這是最後一個必要產出。只跑指令、沒把表格貼進可見回覆＝未完成。**
 
-1. `Bash(node .claude/scripts/token-usage/token_usage.js report unit 2>/dev/null)`
-2. **把 stdout 的整段 Markdown 表格一字不改、完整貼進回覆**（Bash stdout 不會自動顯示給使用者）
-3. 收尾提示（如「是否套用 Reviewer 建議」）一律放在 token 表**之後**
+1. `Bash(node .claude/scripts/dotnet-testing-claude-lite/token_usage.js report unit 2>/dev/null)`
+2. **把 stdout 的兩張 Markdown 表格（`📊 本次測試工作流程 Token 用量` 與 `⏱ 各階段耗時`，各自到 `>` 開頭的備註為止）一字不改、完整貼進回覆**（Bash stdout 不會自動顯示給使用者）
+3. 收尾提示（如「是否套用 Reviewer 建議」）一律放在兩張表**之後**
 4. 僅當指令無輸出或失敗時才可略過
+
+> 耗時取自各 subagent transcript 的時間窗，不依賴 hook——本工作流程不安裝也不需要任何 hook。
 
 ### Phase 5：後置清理
 

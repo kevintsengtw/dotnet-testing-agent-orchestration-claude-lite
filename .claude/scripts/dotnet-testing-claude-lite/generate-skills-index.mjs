@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // 由 .agents/skills/ 的實際內容生成技能索引。
 // 目的：目錄即白名單——新增/移除技能只要重跑本腳本，不必修改 agent 定義檔。
-// 用法: node .claude/scripts/generate-skills-index.mjs [--check]
+// 用法: node .claude/scripts/dotnet-testing-claude-lite/generate-skills-index.mjs [--check]
 import fs from "node:fs";
 import path from "node:path";
 
@@ -69,7 +69,7 @@ for (const name of dirs) {
 }
 
 const lines = [
-  "<!-- 本檔由 .claude/scripts/generate-skills-index.mjs 自動生成，請勿手動編輯。 -->",
+  "<!-- 本檔由 .claude/scripts/dotnet-testing-claude-lite/generate-skills-index.mjs 自動生成，請勿手動編輯。 -->",
   "# 可用技能索引",
   "",
   "本目錄下的技能即本工作流程的可用範圍——**目錄裡沒有的技能不存在**，不需要額外的白名單規則。",

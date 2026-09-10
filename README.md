@@ -47,19 +47,25 @@
 ├── skills/                                    18 個共用技能（內容不可更改）
 └── SKILLS-INDEX.md                            技能索引（自動生成）
 
-.claude/scripts/
+.claude/scripts/dotnet-testing-claude-lite/     整個目錄複製
 ├── coverage-summary.mjs                       Cobertura → 目標類別摘要
-└── generate-skills-index.mjs                  重新生成技能索引
+├── coverage-summary.test.mjs                  回歸測試
+├── generate-skills-index.mjs                  重新生成技能索引
+├── token_usage.js                             token 用量與各階段耗時
+├── token_usage.test.js                        回歸測試
+└── pricing.config.example.json                成本估算單價範本
 ```
 
-**可選配件**，裝不裝都不影響核心流程：
+目錄名稱刻意具辨識度，是為了與 full 版的 `dotnet-testing-claude-full/` 放在同一個
+`.claude/scripts/` 底下也不撞名。兩套可以裝在同一個專案裡，互不干擾。
 
-| 配件 | 用途 | 不裝會少什麼 |
+**可選**，刪掉不影響核心流程：
+
+| 檔案 | 用途 | 刪掉會少什麼 |
 |---|---|---|
-| `.claude/scripts/token-usage/` | token 用量計量與報表 | 結尾少一份 token 報表，流程照常完成 |
-| `.claude/hooks/` | 各階段耗時計時 | 少一張耗時表格，其餘輸出不受影響 |
+| `token_usage.js`、`pricing.config.example.json` | token 用量與各階段耗時報表 | 結尾少兩張表格。Orchestrator 呼叫它的步驟以 `best-effort` 執行，失敗即略過，流程照常完成 |
 
-這兩項的降級行為經隔離環境實測驗證，不是理論推測。
+這項降級行為經隔離環境實測驗證，不是理論推測。
 
 ### 確認安裝完成
 
@@ -69,7 +75,7 @@ ls .claude/agents/dotnet-testing-lite-reviewer.md
 ls .claude/skills/dotnet-testing-lite-orchestrator-unit/SKILL.md
 ls .claude/skills/dotnet-test/
 ls -d .agents/skills/*/ | wc -l    # 應為 18
-ls .claude/scripts/coverage-summary.mjs
+ls .claude/scripts/dotnet-testing-claude-lite/coverage-summary.mjs
 ```
 
 技能路徑不存在時，Author 會**回報錯誤並中止**，不會靜默跳過，這是刻意的 fail-closed 設計。所以上面 `wc -l` 的結果如果不是 18，先把 `.agents/skills/` 補齊再開始用。
